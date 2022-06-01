@@ -1,0 +1,323 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+exports.getPageFromPath = getPageFromPath;
+exports.createPagesMapping = createPagesMapping;
+exports.getEdgeServerEntry = getEdgeServerEntry;
+exports.getAppEntry = getAppEntry;
+exports.getServerlessEntry = getServerlessEntry;
+exports.getClientEntry = getClientEntry;
+exports.createEntrypoints = createEntrypoints;
+exports.runDependingOnPageType = runDependingOnPageType;
+exports.finalizeEntrypoint = finalizeEntrypoint;
+var _chalk = _interopRequireDefault(require("next/dist/compiled/chalk"));
+var _path = require("path");
+var _querystring = require("querystring");
+var _constants = require("../lib/constants");
+var _constants1 = require("../shared/lib/constants");
+var _utils = require("../server/utils");
+var _log = require("./output/log");
+var _utils1 = require("./utils");
+var _getPageStaticInfo = require("./analysis/get-page-static-info");
+var _normalizePathSep = require("../shared/lib/page-path/normalize-path-sep");
+var _normalizePagePath = require("../shared/lib/page-path/normalize-page-path");
+var _utils2 = require("./webpack/loaders/utils");
+function _interopRequireDefault(obj) {
+    return obj && obj.__esModule ? obj : {
+        default: obj
+    };
+}
+function getPageFromPath(pagePath, pageExtensions) {
+    let page = (0, _normalizePathSep).normalizePathSep(pagePath.replace(new RegExp(`\\.+(${pageExtensions.join('|')})$`), ''));
+    page = page.replace(/\/index$/, '');
+    return page === '' ? '/' : page;
+}
+function createPagesMapping({ hasServerComponents , isDev , pageExtensions , pagePaths , pagesType  }) {
+    const previousPages = {};
+    const pages = pagePaths.reduce((result, pagePath)=>{
+        // Do not process .d.ts files inside the `pages` folder
+        if (pagePath.endsWith('.d.ts') && pageExtensions.includes('ts')) {
+            return result;
+        }
+        const pageKey = getPageFromPath(pagePath, pageExtensions);
+        // Assume that if there's a Client Component, that there is
+        // a matching Server Component that will map to the page.
+        // so we will not process it
+        if (hasServerComponents && /\.client$/.test(pageKey)) {
+            return result;
+        }
+        if (pageKey in result) {
+            (0, _log).warn(`Duplicate page detected. ${_chalk.default.cyan((0, _path).join('pages', previousPages[pageKey]))} and ${_chalk.default.cyan((0, _path).join('pages', pagePath))} both resolve to ${_chalk.default.cyan(pageKey)}.`);
+        } else {
+            previousPages[pageKey] = pagePath;
+        }
+        result[pageKey] = (0, _normalizePathSep).normalizePathSep((0, _path).join(pagesType === 'pages' ? _constants.PAGES_DIR_ALIAS : pagesType === 'app' ? _constants.APP_DIR_ALIAS : _constants.ROOT_DIR_ALIAS, pagePath));
+        return result;
+    }, {});
+    if (pagesType !== 'pages') {
+        return pages;
+    }
+    if (isDev) {
+        delete pages['/_app'];
+        delete pages['/_error'];
+        delete pages['/_document'];
+    }
+    // In development we always alias these to allow Webpack to fallback to
+    // the correct source file so that HMR can work properly when a file is
+    // added or removed.
+    const root = isDev ? _constants.PAGES_DIR_ALIAS : 'next/dist/pages';
+    return {
+        '/_app': `${root}/_app`,
+        '/_error': `${root}/_error`,
+        '/_document': `${root}/_document`,
+        ...pages
+    };
+}
+function getEdgeServerEntry(opts) {
+    if (opts.page === _constants.MIDDLEWARE_FILE) {
+        const loaderParams = {
+            absolutePagePath: opts.absolutePagePath,
+            page: opts.page
+        };
+        return `next-middleware-loader?${(0, _querystring).stringify(loaderParams)}!`;
+    }
+    if (opts.page.startsWith('/api/')) {
+        const loaderParams = {
+            absolutePagePath: opts.absolutePagePath,
+            page: opts.page
+        };
+        return `next-edge-function-loader?${(0, _querystring).stringify(loaderParams)}!`;
+    }
+    const loaderParams = {
+        absolute500Path: opts.pages['/500'] || '',
+        absoluteAppPath: opts.pages['/_app'],
+        absoluteDocumentPath: opts.pages['/_document'],
+        absoluteErrorPath: opts.pages['/_error'],
+        absolutePagePath: opts.absolutePagePath,
+        buildId: opts.buildId,
+        dev: opts.isDev,
+        isServerComponent: (0, _utils1).isServerComponentPage(opts.config, opts.absolutePagePath),
+        page: opts.page,
+        stringifiedConfig: JSON.stringify(opts.config)
+    };
+    return {
+        import: `next-middleware-ssr-loader?${(0, _querystring).stringify(loaderParams)}!`,
+        layer: opts.isServerComponent ? 'sc_server' : undefined
+    };
+}
+function getAppEntry(opts) {
+    return {
+        import: `next-app-loader?${(0, _querystring).stringify(opts)}!`,
+        layer: 'sc_server'
+    };
+}
+function getServerlessEntry(opts) {
+    const loaderParams = {
+        absolute404Path: opts.pages['/404'] || '',
+        absoluteAppPath: opts.pages['/_app'],
+        absoluteDocumentPath: opts.pages['/_document'],
+        absoluteErrorPath: opts.pages['/_error'],
+        absolutePagePath: opts.absolutePagePath,
+        assetPrefix: opts.config.assetPrefix,
+        basePath: opts.config.basePath,
+        buildId: opts.buildId,
+        canonicalBase: opts.config.amp.canonicalBase || '',
+        distDir: _constants.DOT_NEXT_ALIAS,
+        generateEtags: opts.config.generateEtags ? 'true' : '',
+        i18n: opts.config.i18n ? JSON.stringify(opts.config.i18n) : '',
+        // base64 encode to make sure contents don't break webpack URL loading
+        loadedEnvFiles: Buffer.from(JSON.stringify(opts.envFiles)).toString('base64'),
+        page: opts.page,
+        poweredByHeader: opts.config.poweredByHeader ? 'true' : '',
+        previewProps: JSON.stringify(opts.previewMode),
+        reactRoot: !!opts.config.experimental.reactRoot ? 'true' : '',
+        runtimeConfig: Object.keys(opts.config.publicRuntimeConfig).length > 0 || Object.keys(opts.config.serverRuntimeConfig).length > 0 ? JSON.stringify({
+            publicRuntimeConfig: opts.config.publicRuntimeConfig,
+            serverRuntimeConfig: opts.config.serverRuntimeConfig
+        }) : ''
+    };
+    return `next-serverless-loader?${(0, _querystring).stringify(loaderParams)}!`;
+}
+function getClientEntry(opts) {
+    const loaderOptions = {
+        absolutePagePath: opts.absolutePagePath,
+        page: opts.page
+    };
+    const pageLoader = `next-client-pages-loader?${(0, _querystring).stringify(loaderOptions)}!`;
+    // Make sure next/router is a dependency of _app or else chunk splitting
+    // might cause the router to not be able to load causing hydration
+    // to fail
+    return opts.page === '/_app' ? [
+        pageLoader,
+        require.resolve('../client/router')
+    ] : pageLoader;
+}
+async function createEntrypoints(params) {
+    const { config , pages , pagesDir , isDev , rootDir , rootPaths , target , appDir , appPaths , pageExtensions ,  } = params;
+    const edgeServer = {};
+    const server = {};
+    const client = {};
+    const getEntryHandler = (mappings, pagesType)=>async (page)=>{
+            const bundleFile = (0, _normalizePagePath).normalizePagePath(page);
+            const clientBundlePath = _path.posix.join('pages', bundleFile);
+            const serverBundlePath = pagesType === 'pages' ? _path.posix.join('pages', bundleFile) : pagesType === 'app' ? _path.posix.join('app', bundleFile) : bundleFile.slice(1);
+            const absolutePagePath = mappings[page];
+            // Handle paths that have aliases
+            const pageFilePath = (()=>{
+                if (absolutePagePath.startsWith(_constants.PAGES_DIR_ALIAS)) {
+                    return absolutePagePath.replace(_constants.PAGES_DIR_ALIAS, pagesDir);
+                }
+                if (absolutePagePath.startsWith(_constants.APP_DIR_ALIAS) && appDir) {
+                    return absolutePagePath.replace(_constants.APP_DIR_ALIAS, appDir);
+                }
+                if (absolutePagePath.startsWith(_constants.ROOT_DIR_ALIAS)) {
+                    return absolutePagePath.replace(_constants.ROOT_DIR_ALIAS, rootDir);
+                }
+                return require.resolve(absolutePagePath);
+            })();
+            /**
+       * When we find a middleware file that is not in the ROOT_DIR we fail.
+       * There is no need to check on `dev` as this should only happen when
+       * building for production.
+       */ if (!absolutePagePath.startsWith(_constants.ROOT_DIR_ALIAS) && /[\\\\/]_middleware$/.test(page)) {
+                throw new Error(`nested Middleware is not allowed (found pages${page}) - https://nextjs.org/docs/messages/nested-middleware`);
+            }
+            const isServerComponent = _utils2.serverComponentRegex.test(absolutePagePath);
+            const staticInfo = await (0, _getPageStaticInfo).getPageStaticInfo({
+                nextConfig: config,
+                pageFilePath,
+                isDev
+            });
+            runDependingOnPageType({
+                page,
+                pageRuntime: staticInfo.runtime,
+                onClient: ()=>{
+                    if (isServerComponent) {
+                    // We skip the initial entries for server component pages and let the
+                    // server compiler inject them instead.
+                    } else {
+                        client[clientBundlePath] = getClientEntry({
+                            absolutePagePath: mappings[page],
+                            page
+                        });
+                    }
+                },
+                onServer: ()=>{
+                    if (pagesType === 'app' && appDir) {
+                        server[serverBundlePath] = getAppEntry({
+                            name: serverBundlePath,
+                            pagePath: mappings[page],
+                            appDir,
+                            pageExtensions
+                        });
+                    } else if ((0, _utils).isTargetLikeServerless(target)) {
+                        if (page !== '/_app' && page !== '/_document') {
+                            server[serverBundlePath] = getServerlessEntry({
+                                ...params,
+                                absolutePagePath: mappings[page],
+                                page
+                            });
+                        }
+                    } else {
+                        server[serverBundlePath] = isServerComponent ? {
+                            import: mappings[page],
+                            layer: 'sc_server'
+                        } : [
+                            mappings[page]
+                        ];
+                    }
+                },
+                onEdgeServer: ()=>{
+                    edgeServer[serverBundlePath] = getEdgeServerEntry({
+                        ...params,
+                        absolutePagePath: mappings[page],
+                        bundlePath: clientBundlePath,
+                        isDev: false,
+                        isServerComponent,
+                        page
+                    });
+                }
+            });
+        }
+    ;
+    if (appDir && appPaths) {
+        const entryHandler = getEntryHandler(appPaths, 'app');
+        await Promise.all(Object.keys(appPaths).map(entryHandler));
+    }
+    if (rootPaths) {
+        await Promise.all(Object.keys(rootPaths).map(getEntryHandler(rootPaths, 'root')));
+    }
+    await Promise.all(Object.keys(pages).map(getEntryHandler(pages, 'pages')));
+    return {
+        client,
+        server,
+        edgeServer
+    };
+}
+function runDependingOnPageType(params) {
+    if (params.page === _constants.MIDDLEWARE_FILE) {
+        return [
+            params.onEdgeServer()
+        ];
+    } else if (params.page.match(_constants.API_ROUTE)) {
+        return params.pageRuntime === 'edge' ? [
+            params.onEdgeServer()
+        ] : [
+            params.onServer()
+        ];
+    } else if (params.page === '/_document') {
+        return [
+            params.onServer()
+        ];
+    } else if (params.page === '/_app' || params.page === '/_error' || params.page === '/404' || params.page === '/500') {
+        return [
+            params.onClient(),
+            params.onServer()
+        ];
+    } else {
+        return [
+            params.onClient(),
+            params.pageRuntime === 'edge' ? params.onEdgeServer() : params.onServer(), 
+        ];
+    }
+}
+function finalizeEntrypoint({ name , compilerType , value , isServerComponent  }) {
+    const entry = typeof value !== 'object' || Array.isArray(value) ? {
+        import: value
+    } : value;
+    if (compilerType === 'server') {
+        const isApi = name.startsWith('pages/api/');
+        return {
+            publicPath: isApi ? '' : undefined,
+            runtime: isApi ? 'webpack-api-runtime' : 'webpack-runtime',
+            layer: isApi ? 'api' : isServerComponent ? 'sc_server' : undefined,
+            ...entry
+        };
+    }
+    if (compilerType === 'edge-server') {
+        return {
+            layer: name === _constants.MIDDLEWARE_FILENAME ? 'middleware' : undefined,
+            library: {
+                name: [
+                    '_ENTRIES',
+                    `middleware_[name]`
+                ],
+                type: 'assign'
+            },
+            runtime: _constants1.EDGE_RUNTIME_WEBPACK,
+            asyncChunks: false,
+            ...entry
+        };
+    }
+    if (// Client special cases
+    name !== 'polyfills' && name !== _constants1.CLIENT_STATIC_FILES_RUNTIME_MAIN && name !== _constants1.CLIENT_STATIC_FILES_RUNTIME_MAIN_ROOT && name !== _constants1.CLIENT_STATIC_FILES_RUNTIME_AMP && name !== _constants1.CLIENT_STATIC_FILES_RUNTIME_REACT_REFRESH) {
+        return {
+            dependOn: name.startsWith('pages/') && name !== 'pages/_app' ? 'pages/_app' : 'main',
+            ...entry
+        };
+    }
+    return entry;
+}
+
+//# sourceMappingURL=entries.js.map

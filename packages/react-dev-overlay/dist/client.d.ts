@@ -1,0 +1,10 @@
+declare function register(): void;
+declare function unregister(): void;
+declare function onBuildOk(): void;
+declare function onBuildError(message: string): void;
+declare function onFullRefreshNeeded(reason?: string): void;
+declare function onRefresh(): void;
+export { getErrorByType } from './internal/helpers/getErrorByType';
+export { getNodeError } from './internal/helpers/nodeStackFrames';
+export { default as ReactDevOverlay } from './internal/ReactDevOverlay';
+export { onBuildOk, onBuildError, onFullRefreshNeeded, register, unregister, onRefresh, };
