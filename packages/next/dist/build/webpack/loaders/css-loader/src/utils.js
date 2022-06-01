@@ -369,7 +369,7 @@ function isUrlRequestable(url) {
     }
     // Absolute URLs
     if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
-        return true;
+        return false;
     }
     // `#` URLs
     if (/^#/.test(url)) {
