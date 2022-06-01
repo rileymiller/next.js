@@ -16,10 +16,15 @@ import {
   startStaticServer,
   stopApp,
 } from 'next-test-utils'
-import webdriver from 'next-webdriver'
+import webdriver, { BrowserInterface } from 'next-webdriver'
 
 jest.setTimeout(1000 * 60 * 2)
 const appDir = join(__dirname, '../')
+
+export function waitFor(millis) {
+  return new Promise((resolve) => setTimeout(resolve, millis))
+}
+
 
 describe(`Handle url imports`, () => {
   let staticServer
@@ -103,6 +108,24 @@ describe(`Handle url imports`, () => {
                 .elementByCss('#static-css')
                 .getComputedCss('background-image'),
             /^url\("http:\/\/localhost:\d+\/_next\/static\/media\/vercel\.[0-9a-f]{8}\.png"\)$/
+          )
+        } finally {
+          await browser.close()
+        }
+      })
+
+      it(`should ignore url import by cssFileResolveIgnoreUrlPattern`, async () => {
+        let browser
+        try {
+          browser = await webdriver(appPort, '/css')
+          await browser.waitForElementByCss('#static-css')
+
+          const styleByUrl = await browser.eval('document.getElementsByTagName("style")[0].innerText')
+  
+          await check(
+            () =>
+              styleByUrl,
+            /url\('https:\/\/cdn\.jsdelivr\.net\/npm\/bootstrap@4\.4\.1\/dist\/css\/bootstrap\.min\.css'\)/
           )
         } finally {
           await browser.close()

@@ -30,9 +30,9 @@ export function getGlobalCssLoader(
       // Next.js controls CSS Modules eligibility:
       modules: false,
       url: (url: string, resourcePath: string) =>
-        cssFileResolve(url, resourcePath, ctx.experimental.urlImports),
+        cssFileResolve(url, resourcePath, ctx.experimental.urlImports, ctx.experimental.cssFileResolveIgnoreUrlPattern),
       import: (url: string, _: any, resourcePath: string) =>
-        cssFileResolve(url, resourcePath, ctx.experimental.urlImports),
+        cssFileResolve(url, resourcePath, ctx.experimental.urlImports, ctx.experimental.cssFileResolveIgnoreUrlPattern)
     },
   })
 

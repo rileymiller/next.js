@@ -117,6 +117,7 @@ export interface ExperimentalConfig {
   serverComponents?: boolean
   fullySpecified?: boolean
   urlImports?: NonNullable<webpack5.Configuration['experiments']>['buildHttp']
+  cssFileResolveIgnoreUrlPattern?: RegExp
   outputFileTracingRoot?: string
   outputStandalone?: boolean
   images?: {
